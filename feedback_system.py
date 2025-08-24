@@ -217,7 +217,7 @@ class ExerciseFeedbackSystem:
         
         # Check if any non-priority joint is moving vigorously
         # Use a higher threshold to only catch vigorous movement
-        vigorous_motion_threshold = 0.1  # Much higher threshold for vigorous movement
+        vigorous_motion_threshold = 0.25  # Increased threshold to avoid false positives
         
         for idx, motion_amp in non_priority_motion:
             if motion_amp > vigorous_motion_threshold:

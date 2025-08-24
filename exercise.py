@@ -391,12 +391,35 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
                         amp_user_pr = masked_motion_amplitude(A_us_rs, priority_mask)
                         amp_tr_pr = masked_motion_amplitude(A_tr, priority_mask) + 1e-6
                         amp_ratio = float(np.clip(amp_user_pr / amp_tr_pr, 0.0, 1.0))
-                        # penalize non-priority excessive motion
-                        non_mask = ~priority_mask if np.any(priority_mask) else np.zeros_like(priority_mask)
-                        amp_user_np = masked_motion_amplitude(A_us_rs, non_mask)
-                        # scale penalty: more non-priority motion -> lower score
-                        penalty = 1.0 / (1.0 + 0.02 * amp_user_np)
-                        score = float(sim_angle * amp_ratio * penalty)
+                        # First calculate the base score based on priority joint performance
+                        base_score = float(sim_angle * amp_ratio)
+                        
+                        # Only check non-priority motion if priority motion is good enough
+                        if base_score >= 0.4:  # If priority joints are performing well
+                            # Check non-priority joints only when priority motion is good
+                            non_mask = ~priority_mask if np.any(priority_mask) else np.zeros_like(priority_mask)
+                            amp_user_np = masked_motion_amplitude(A_us_rs, non_mask)
+                            amp_trainer_np = masked_motion_amplitude(A_tr, non_mask)
+                            
+                            # Calculate how much user's non-priority motion differs from trainer
+                            np_motion_ratio = amp_user_np / (amp_trainer_np + 1e-6)
+                            
+                            # Only penalize if user is moving non-priority joints MUCH more than trainer
+                            if np_motion_ratio > 2.5:  # User moving 150% more than trainer
+                                excessive_motion_penalty = 0.3  # Heavy penalty for wrong body part motion
+                                score = base_score * excessive_motion_penalty
+                                print(f"[DEBUG] Excessive non-priority motion detected: user={amp_user_np:.3f}, trainer={amp_trainer_np:.3f}, ratio={np_motion_ratio:.2f}")
+                                print(f"[SCORING] Applying penalty: {excessive_motion_penalty}, final score: {score:.3f}")
+                            else:
+                                # Non-priority motion is reasonable, keep good score
+                                score = base_score
+                                print(f"[DEBUG] Non-priority motion OK: user={amp_user_np:.3f}, trainer={amp_trainer_np:.3f}, ratio={np_motion_ratio:.2f}")
+                                print(f"[SCORING] Keeping good score: {score:.3f}")
+                        else:
+                            # Priority motion is poor, don't worry about non-priority
+                            score = base_score
+                            print(f"[DEBUG] Priority motion poor ({base_score:.3f}), skipping non-priority check")
+                        
                         # apply a gentle nonlinear boost to encourage near-correct reps
                         score = calibrate_score(score, gamma=0.8)
                     except Exception as e:
