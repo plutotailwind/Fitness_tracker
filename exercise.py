@@ -25,6 +25,7 @@ from scoring import (
 )
 from orientation import compute_forward_vector_3d, average_forward_vector
 from weights_detection import detect_weights
+from feedback_system import create_feedback_system
 
 # SimpleGCN no longer used (angle-based scoring)
 
@@ -194,6 +195,9 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
     # Build weights from user-selected priorities
     default_weights = build_weights_from_priority(priority, priority_weight, nonpriority_weight, D)
     priority_mask = build_priority_mask(priority, D)
+    
+    # Initialize feedback system
+    feedback_system = create_feedback_system(priority, default_weights)
 
     # 3) Set up live capture
     cap_trainer = cv2.VideoCapture(trainer_video_path)
@@ -239,6 +243,11 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
     # State for showing start message
     show_start_message = False
     start_message_time = 0.0
+    
+    # Feedback system state
+    current_feedback = ""
+    feedback_display_time = 0.0
+    feedback_duration = 3.0  # Show feedback for 3 seconds
 
     while True:
         ok_t, trainer_frame = cap_trainer.read()
@@ -395,7 +404,40 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
                         score = 0.0
                 rep_scores.append(score)
                 last_rep_score = score
+                
+                # Generate real-time feedback for this rep
+                if len(user_buf) > 0:
+                    user_segment_angles = compute_angles_for_seq(user_segment)
+                    user_motion_amp = masked_motion_amplitude(user_segment_angles, priority_mask)
+                    trainer_motion_amp = masked_motion_amplitude(A_tr, priority_mask)
+                    
+                    # Get feedback from the system
+                    feedback = feedback_system.analyze_rep_performance(
+                        user_segment_angles, A_tr, user_motion_amp, 
+                        trainer_motion_amp, score, priority_mask
+                    )
+                    
+                    # Update feedback display
+                    current_feedback = feedback
+                    feedback_display_time = time.time()
+                    print(f"[FEEDBACK] {feedback}")
+                
                 loop_pending = False
+            
+            # Continuous feedback during exercise (not just after reps)
+            elif (not pre_start_mode) and len(user_buf) >= 10:
+                # Check if user is moving enough
+                recent_user_angles = compute_angles_for_seq(list(user_buf)[-10:])
+                user_motion_amp = masked_motion_amplitude(recent_user_angles, priority_mask)
+                
+                # Only show continuous feedback if no rep feedback is currently displayed
+                if not current_feedback or (time.time() - feedback_display_time) >= feedback_duration:
+                    if user_motion_amp < 0.02:  # Very low motion
+                        current_feedback = "Start moving! Follow the trainer"
+                        feedback_display_time = time.time()
+                    elif user_motion_amp < 0.05:  # Low motion
+                        current_feedback = "Move more! Increase your range"
+                        feedback_display_time = time.time()
 
         # Track loop state for next iteration to avoid double-arming
         prev_looped = looped
@@ -412,6 +454,23 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
         if last_rep_score is not None:
             cv2.putText(combined, f"Last Rep Score: {last_rep_score:.3f}", (20, 95),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (50, 255, 50), 2)
+        
+        # Display real-time feedback
+        if current_feedback and (time.time() - feedback_display_time) < feedback_duration:
+            # Choose color based on feedback type
+            if "Excellent" in current_feedback or "Good" in current_feedback:
+                color = (50, 255, 50)  # Green for positive feedback
+            elif "Start moving" in current_feedback:
+                color = (0, 200, 255)  # Orange for movement prompts
+            else:
+                color = (0, 255, 255)  # Yellow for improvement tips
+            
+            # Display feedback on screen
+            cv2.putText(combined, current_feedback, (20, 210),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        else:
+            # Clear feedback after duration expires
+            current_feedback = ""
         if pre_start_mode:
             # Use stable (debounced) gate states for UI to avoid flicker
             weights_need_ok = (not require_weights) or stable_weights_ok
