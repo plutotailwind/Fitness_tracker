@@ -2,6 +2,9 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from collections import deque
 import cv2
+import pyttsx3
+import time
+import threading
 
 class ExerciseFeedbackSystem:
     """
@@ -30,6 +33,57 @@ class ExerciseFeedbackSystem:
         self.feedback_cooldown = 0
         self.feedback_history = deque(maxlen=10)
         
+        # Voice feedback setup
+        self.voice_enabled = True
+        self.voice_cooldown = 0.1  # Very short cooldown to allow feedback for every rep
+        self.last_voice_time = 0
+    
+    def _speak_in_thread(self, feedback: str):
+        """Speak feedback in a separate thread with its own voice engine."""
+        try:
+            # Create a fresh voice engine for this feedback
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 150)
+            engine.setProperty('volume', 0.8)
+            
+            print(f"[VOICE] Speaking: {feedback}")
+            engine.say(feedback)
+            engine.runAndWait()
+            engine.stop()
+            
+            print(f"[VOICE] Finished speaking: {feedback}")
+        except Exception as e:
+            print(f"[VOICE] Error speaking: {e}")
+        finally:
+            # Clean up
+            try:
+                del engine
+            except:
+                pass
+
+    def speak_feedback(self, feedback: str):
+        """Speak feedback in a new thread (non-blocking)."""
+        if not self.voice_enabled:
+            print(f"[VOICE] Voice disabled. Voice enabled: {self.voice_enabled}")
+            return
+        
+        current_time = time.time()
+        # Only check cooldown, allow same feedback to be spoken multiple times
+        if current_time - self.last_voice_time < self.voice_cooldown:
+            print(f"[VOICE] Skipping feedback due to cooldown: {feedback}")
+            return
+        
+        self.last_voice_time = current_time
+        print(f"[VOICE] Starting new thread for: {feedback}")
+        
+        # Spawn a new thread for this feedback
+        feedback_thread = threading.Thread(
+            target=self._speak_in_thread, 
+            args=(feedback,), 
+            daemon=True
+        )
+        feedback_thread.start()
+    
     def analyze_rep_performance(self, 
                                user_angles: np.ndarray, 
                                trainer_angles: np.ndarray,
@@ -54,16 +108,22 @@ class ExerciseFeedbackSystem:
         
         # Check if this is a good rep first
         if score >= self.excellent_rep_threshold:
-            return "Excellent rep! Perfect form!"
+            feedback = "Excellent rep! Perfect form!"
+            self.speak_feedback(feedback)
+            return feedback
         elif score >= self.good_rep_threshold:
-            return "Good rep! Keep it up!"
+            feedback = "Good rep! Keep it up!"
+            self.speak_feedback(feedback)
+            return feedback
         
         # Analyze specific issues
         feedback_parts = []
         
         # 1. Check if user is moving at all
         if user_motion_amp < self.motion_threshold:
-            return "Start moving! Follow the trainer's motion"
+            feedback = "Start moving! Follow the trainer's motion"
+            self.speak_feedback(feedback)
+            return feedback
         
         # 2. Check if user is moving wrong body parts (non-priority joints)
         # Only check this if user is moving enough overall to avoid false positives
@@ -72,6 +132,7 @@ class ExerciseFeedbackSystem:
                 user_angles, trainer_angles, priority_mask
             )
             if wrong_motion_feedback:
+                self.speak_feedback(wrong_motion_feedback)
                 return wrong_motion_feedback
         # If user is not moving enough, skip wrong body part check and go to motion amplitude
         
@@ -97,9 +158,12 @@ class ExerciseFeedbackSystem:
         # Combine feedback
         if feedback_parts:
             # Take the most important feedback (first one)
-            return feedback_parts[0]
+            feedback = feedback_parts[0]
+            self.speak_feedback(feedback)
+            return feedback
         else:
-            return "Keep going! You're doing well"
+            feedback = "Keep going! You're doing well"
+            return feedback
     
     def _analyze_motion_amplitude(self, 
                                  user_amp: float, 

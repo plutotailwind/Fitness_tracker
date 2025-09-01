@@ -26,6 +26,7 @@ from scoring import (
 from orientation import compute_forward_vector_3d, average_forward_vector
 from weights_detection import detect_weights
 from feedback_system import create_feedback_system
+from summary_window import show_exercise_summary
 
 # SimpleGCN no longer used (angle-based scoring)
 
@@ -420,25 +421,26 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
                             score = base_score
                             print(f"[DEBUG] Priority motion poor ({base_score:.3f}), skipping non-priority check")
                         
-                        # apply a gentle nonlinear boost to encourage near-correct reps
-                        score = calibrate_score(score, gamma=0.8)
+                                                                         # Store the score for feedback (no gamma calibration)
+                        final_score = score
                     except Exception as e:
                         print(f"[DEBUG] Scoring error: {e}")
                         score = 0.0
+                        final_score = 0.0
                 rep_scores.append(score)
                 last_rep_score = score
-                
-                # Generate real-time feedback for this rep
+                 
+                 # Generate real-time feedback for this rep using uncalibrated score
                 if len(user_buf) > 0:
                     user_segment_angles = compute_angles_for_seq(user_segment)
                     user_motion_amp = masked_motion_amplitude(user_segment_angles, priority_mask)
                     trainer_motion_amp = masked_motion_amplitude(A_tr, priority_mask)
-                    
-                    # Get feedback from the system
+                     
+                                          # Get feedback from the system using final score
                     feedback = feedback_system.analyze_rep_performance(
                         user_segment_angles, A_tr, user_motion_amp, 
-                        trainer_motion_amp, score, priority_mask
-                    )
+                        trainer_motion_amp, final_score, priority_mask
+                     )
                     
                     # Update feedback display
                     current_feedback = feedback
@@ -536,7 +538,9 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
 
         cv2.imshow(win, combined)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        
+        if key == ord('q'):
             break
 
     cap_trainer.release()
@@ -547,6 +551,10 @@ def run_live_session(trainer_video_path, device='cpu', hidden=64, priority=None,
     print(f"Total Reps: {len(rep_scores)}")
     if rep_scores:
         print("Rep Scores:", [f"{s:.3f}" for s in rep_scores])
+        
+        # Show summary window
+        print("\n[INFO] Opening summary window...")
+        show_exercise_summary(rep_scores)
 
 # UI helpers moved to ui_priority.py
 
